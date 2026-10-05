@@ -1,0 +1,32 @@
+# Build artifacts
+build/
+dist/
+out/
+*.exe
+*.dll
+*.lib
+*.pdb
+*.exp
+*.ilk
+*.obj
+
+# third-party binaries / large deps (fetch separately)
+third_party/
+!third_party/README.md
+
+# Visual Studio / CMake
+.vs/
+CMakeSettings.json
+*.user
+CMakeCache.txt
+CMakeFiles/
+
+# Local runtime / secrets
+config.json
+cookies.txt
+*.log
+_ref/
+
+# OS
+Thumbs.db
+Desktop.ini
