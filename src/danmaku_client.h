@@ -58,7 +58,8 @@ public:
 
 private:
     void ThreadMain();
-    void ConnectOnce(const std::string& host, int wssPort);
+    // 返回值：true=已成功建立连接并认证（之后掉线再回同一台）；false=握手/认证早期失败（换下一台）
+    bool ConnectOnce(const std::string& host, int wssPort);
     void NotifyStatus(DanmakuStatus st);
 
     std::thread thread_;

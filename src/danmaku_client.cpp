@@ -204,38 +204,33 @@ void DanmakuClient::Stop() {
 
 void DanmakuClient::ThreadMain() {
     int serverIdx = 0;
-    int retry = 0;
     while (!stopRequested_.load()) {
         const auto& srv = servers_[static_cast<size_t>(serverIdx) % servers_.size()];
-        ConnectOnce(srv.host, srv.wss_port);
+        bool established = ConnectOnce(srv.host, srv.wss_port);
         if (stopRequested_.load()) break;
-        // 指数退避
-        int delaySec = 1;
-        for (int i = 0; i < retry && delaySec < 30; ++i) delaySec *= 2;
-        if (delaySec > 30) delaySec = 30;
+        if (!established) { serverIdx++; continue; }
         NotifyStatus(DanmakuStatus::Reconnecting);
-        for (int i = 0; i < delaySec * 2 && !stopRequested_.load(); ++i)
-            Sleep(500);
-        retry++;
-        serverIdx++;
+        for (int i = 0; i < 3 * 2 && !stopRequested_.load(); ++i) Sleep(500);
     }
     NotifyStatus(DanmakuStatus::Stopped);
 }
 
 // ---- 单次连接：TLS+WS 升级 → 认证 → 心跳 → 接收解析 -----------------
 
-void DanmakuClient::ConnectOnce(const std::string& host, int wssPort) {
+bool DanmakuClient::ConnectOnce(const std::string& host, int wssPort) {
     WsSocket ws;
     if (!ws.Connect(host, wssPort)) {
         DanmakuDiag("[ws] Connect FAIL host=%s port=%d", host.c_str(), wssPort);
-        return;
+        return false;
     }
 
     // ---- 认证包（op=7，header protover=1，body JSON 含 buvid）----
+    // 与稳定的 Python 参考实现一致：protover=2（zlib 解压），而非 3（brotli）。
+    // brotli 在本手写 schannel 栈上偶发解压/握手异常，zlib 实测更稳。
     json auth;
     auth["uid"] = 0;
     auth["roomid"] = roomId_;
-    auth["protover"] = 3;          // 请求 brotli 推送
+    auth["protover"] = 2;          // 请求 zlib 推送（与 bili-live-overlay 一致）
     auth["platform"] = "web";
     auth["type"] = 2;
     auth["buvid"] = buvid3_;
@@ -245,7 +240,7 @@ void DanmakuClient::ConnectOnce(const std::string& host, int wssPort) {
 
     if (!ws.Send(authPkt.data(), authPkt.size())) {
         DanmakuDiag("[ws] auth send FAIL");
-        return;
+        return false;
     }
 
     // ---- 接收循环 ----
@@ -260,9 +255,10 @@ void DanmakuClient::ConnectOnce(const std::string& host, int wssPort) {
             DanmakuDiag("[ws] no data 45s, force reconnect");
             break;
         }
-        // 每 30 秒心跳（op=2）
+        // 每 30 秒心跳（op=2，空 body——与 Python 参考实现一致；
+        // 之前误发 "[object Object]" 字符串会被服务器判定异常而踢线）
         if (GetTickCount64() - lastHeartbeat >= 30000) {
-            auto hb = MakePacket("[object Object]", 16, 1, 2);
+            auto hb = MakePacket("", 0, 1, 2);
             if (!ws.Send(hb.data(), hb.size())) {
                 DanmakuDiag("[ws] heartbeat send FAIL");
                 break;  // 连接已死，立即重连
@@ -298,8 +294,8 @@ void DanmakuClient::ConnectOnce(const std::string& host, int wssPort) {
                     if (j.value("code", -1) == 0) {
                         authed = true;
                         NotifyStatus(DanmakuStatus::Connected);
-                        // 认证成功立即发一次心跳
-                        auto hb = MakePacket("[object Object]", 16, 1, 2);
+                        // 认证成功立即发一次心跳（空 body）
+                        auto hb = MakePacket("", 0, 1, 2);
                         ws.Send(hb.data(), hb.size());
                         lastHeartbeat = GetTickCount64();
                     } else {
@@ -366,5 +362,5 @@ void DanmakuClient::ConnectOnce(const std::string& host, int wssPort) {
     }
 
     ws.Close();
-    (void)authed;
+    return authed;
 }
